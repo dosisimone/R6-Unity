@@ -1,6 +1,6 @@
 ﻿using Unity.Burst;
-using Unity.Collections;
 using Unity.Jobs;
+using Unity.Collections;
 
 namespace dousi96.Geometry.Triangulator
 {
@@ -8,7 +8,7 @@ namespace dousi96.Geometry.Triangulator
     public struct PrepareTrianglesListJob : IJob
     {
         [ReadOnly]
-        public MultiPolygonJobData Polygons;
+        public MultiPolygonData Polygons;
         public NativeList<int> OutTriangles;
 
         public void Execute()

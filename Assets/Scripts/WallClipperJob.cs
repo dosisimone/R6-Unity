@@ -1,16 +1,17 @@
-﻿using ClipperLib;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using UnityEngine;
 using Unity.Jobs;
 using Unity.Mathematics;
-using UnityEngine;
+using dousi96.Geometry;
+using ClipperLib;
 
 public struct WallClipperJob : IJob
 {
     private const long precision = 1000;
 
-    public MultiPolygonJobData subjects;
-    public MultiPolygonJobData clips;
-    public MultiPolygonJobData output;
+    public MultiPolygonData subjects;
+    public MultiPolygonData clips;
+    public MultiPolygonData output;
 
     public float2 MinWallAnglePoint;
     public float2 MaxWallAnglePoint;

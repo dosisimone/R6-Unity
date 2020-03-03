@@ -10,7 +10,7 @@ namespace dousi96.Geometry.Extruder
     public struct ExtruderJob : IJob
     {
         [ReadOnly]
-        public MultiPolygonJobData Polygons;
+        public MultiPolygonData Polygons;
         [ReadOnly]
         public float3 ExtrudeDirection;
         public NativeList<Vector3> OutVertices;
@@ -64,7 +64,7 @@ namespace dousi96.Geometry.Extruder
 
                 for (int phi = 0; phi < Polygons.GetPolygonHolesNum(pi); ++phi)
                 {
-                    NativeArray<MultiPolygonJobData.Vertex> hole = Polygons.GetPolygonHole(pi, phi);
+                    NativeArray<MultiPolygonData.Vertex> hole = Polygons.GetPolygonHole(pi, phi);
                     int startHoleIndex = hole[0].Index;
                     int contourHoleLength = hole.Length;
                     int endHoleIndex = startHoleIndex + contourHoleLength;

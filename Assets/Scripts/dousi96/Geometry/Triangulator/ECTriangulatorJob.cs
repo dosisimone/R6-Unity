@@ -1,8 +1,9 @@
-﻿using JacksonDunstan.NativeCollections;
+﻿using System;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
+using JacksonDunstan.NativeCollections;
 
 namespace dousi96.Geometry.Triangulator
 {
@@ -13,212 +14,283 @@ namespace dousi96.Geometry.Triangulator
     [BurstCompile]
     public struct ECTriangulatorJob : IJob
     {
+        [BurstCompile]
+        private struct ECHoleData : IComparable<ECHoleData>
+        {
+            public int HoleIndex;
+            public int HoleFirstIndex;
+            public int HoleLength;
+            public int BridgePointIndex;
+            public float2 BridgePoint;
+            public int CompareTo(ECHoleData other)
+            {
+                return (BridgePoint.x > other.BridgePoint.x) ? -1 : +1;
+            }
+        }
+
         [ReadOnly]
-        public PolygonJobData Polygon;
+        public SinglePolygonData Polygon;
         [WriteOnly]
         public NativeArray<int> OutTriangles;
 
         public void Execute()
         {
-            int totNumVerts = Polygon.NumHoles * 2 + Polygon.NumTotVertices;
-            NativeLinkedList<int> VertexIndexLinkedList = new NativeLinkedList<int>(totNumVerts, Allocator.Temp);
-            //add contour points to the vertices linked list and set the max ray length
-            float minx = float.MaxValue;
-            float maxx = float.MinValue;
-            for (int i = 0; i < Polygon.NumContourPoints; ++i)
+            NativeLinkedList<int> hullVertices = StorePolygonContourAsLinkedList();
+
+            #region Removing Holes 
+            //create the array containing the holes data
+            NativeArray<ECHoleData> holes = GetHolesDataSortedByMaxX();
+            //remove holes
+            for (int hi = 0; hi < holes.Length; ++hi)
             {
-                VertexIndexLinkedList.InsertAfter(VertexIndexLinkedList.Tail, i);
-                if (Polygon.Vertices[i].x < minx)
-                {
-                    minx = Polygon.Vertices[i].x;
-                }
-                if (Polygon.Vertices[i].x > maxx)
-                {
-                    maxx = Polygon.Vertices[i].x;
-                }
-            }
+                ECHoleData hole = holes[hi];
+                var intersectionEdgeP0 = hullVertices.GetEnumerator();
+                var intersectionEdgeP1 = hullVertices.GetEnumerator();
+                float2 intersectionPoint = new float2(float.MaxValue, hole.BridgePoint.y);
 
-            #region Removing Holes
-            if (Polygon.NumHoles > 0)
-            {
-                //create the array containing the holes data
-                NativeArray<EarClippingHoleData> holesData = new NativeArray<EarClippingHoleData>(Polygon.NumHoles, Allocator.Temp);
-                for (int i = 0; i < Polygon.NumHoles; ++i)
+                for (var currentHullVertex = hullVertices.Head; currentHullVertex.IsValid; currentHullVertex.MoveNext())
                 {
-                    int indexMaxX = -1;
-                    float maxX = float.MinValue;
-                    for (int j = 0; j < Polygon.NumPointsPerHole[i]; ++j)
+                    var nextHullVertex = (currentHullVertex.Next.IsValid) ? currentHullVertex.Next : hullVertices.Head;
+
+                    float2 currPoint = Polygon[currentHullVertex.Value];
+                    float2 nextPoint = Polygon[nextHullVertex.Value];
+
+                    //M is to the left of the line containing the edge (M is inside the outer polygon)
+                    bool isMOnLeftOfEdgeLine = (Math2DUtils.LineSide(hole.BridgePoint, currPoint, nextPoint) < 0f);
+                    if (isMOnLeftOfEdgeLine)
                     {
-                        float2 holeVertex = Polygon.GetHolePoint(i, j);
-                        if (maxX < holeVertex.x)
+                        continue;
+                    }
+
+                    // at least one point must be to right of the hole bridge point for intersection with ray to be possible
+                    if (currPoint.x < hole.BridgePoint.x && nextPoint.x < hole.BridgePoint.x)
+                    {
+                        continue;
+                    }
+
+                    if (currPoint.y > hole.BridgePoint.y == nextPoint.y > hole.BridgePoint.y)
+                    {
+                        continue;
+                    }
+
+                    float intersectionX = nextPoint.x; // if line p0,p1 is vertical
+                    if (math.abs(currPoint.x - nextPoint.x) > float.Epsilon)
+                    {
+                        float intersectY = hole.BridgePoint.y;
+                        float gradient = (currPoint.y - nextPoint.y) / (currPoint.x - nextPoint.x);
+                        float c = nextPoint.y - gradient * nextPoint.x;
+                        intersectionX = (intersectY - c) / gradient;
+                    }
+
+                    if (intersectionX < intersectionPoint.x)
+                    {
+                        intersectionPoint.x = intersectionX;
+                        intersectionEdgeP0 = currentHullVertex;
+                        intersectionEdgeP1 = nextHullVertex;
+                    }
+                }
+
+                var selectedHullBridgePoint = hullVertices.GetEnumerator();
+                //If I is a vertex of the outer polygon, then M and I are mutually visible
+                if (Math2DUtils.SamePoints(intersectionPoint, Polygon[intersectionEdgeP0.Value]))
+                {
+                    selectedHullBridgePoint = intersectionEdgeP0;
+                }
+                else if (Math2DUtils.SamePoints(intersectionPoint, Polygon[intersectionEdgeP1.Value]))
+                {
+                    selectedHullBridgePoint = intersectionEdgeP1;
+                }
+                else
+                {
+                    //Select P to be the endpoint of maximum x-value for this edge
+                    var P = (Polygon[intersectionEdgeP0.Value].x > Polygon[intersectionEdgeP1.Value].x) ? intersectionEdgeP0 : intersectionEdgeP1;
+
+                    bool existReflexVertexInsideMIP = false;
+                    float minAngle = float.MaxValue;
+                    float minDist = float.MaxValue;
+                    for (var currOuterPolygonVertex = hullVertices.Head; currOuterPolygonVertex.IsValid; currOuterPolygonVertex.MoveNext())
+                    {
+                        if (currOuterPolygonVertex.Value == P.Value)
                         {
-                            maxX = holeVertex.x;
-                            indexMaxX = j;
+                            continue;
                         }
-                    }
-                    holesData[i] = new EarClippingHoleData(Polygon, i, indexMaxX);
-                }
-                holesData.Sort();
 
-                //start the hole removing algorithm
-                float maxRayLength = math.distance(minx, maxx);
-                for (int i = 0; i < holesData.Length; ++i)
-                {
-                    float2 M = Polygon.GetHolePoint(holesData[i].HoleIndex, holesData[i].IndexMaxX);
-                    float distanceMI = float.MaxValue;
-                    float2 I = new float2();
-                    NativeLinkedList<int>.Enumerator vi = VertexIndexLinkedList.Head;
+                        var nextOuterPolygonVertex = (currOuterPolygonVertex.Next.IsValid) ? currOuterPolygonVertex.Next : hullVertices.Head;
+                        var prevOuterPolygonVertex = (currOuterPolygonVertex.Prev.IsValid) ? currOuterPolygonVertex.Prev : hullVertices.Tail;
 
-                    for (NativeLinkedList<int>.Enumerator contourEnum = VertexIndexLinkedList.Head;
-                        contourEnum.IsValid;
-                        contourEnum.MoveNext())
-                    {
-                        NativeLinkedList<int>.Enumerator contourNextEnum = (!contourEnum.Next.IsValid) ? VertexIndexLinkedList.Head : contourEnum.Next;
-
-                        //intersect the ray
-                        float2 intersection = new float2();
-                        //bool areSegmentsIntersecting = Geometry2DUtils.SegmentsIntersection(M, new float2(maxRayLength, M.y), Polygon.Vertices[contourEnum.Value], Polygon.Vertices[contourNextEnum.Value], out intersection);
-                        //if (!areSegmentsIntersecting)
-                        //{
-                        //    continue;
-                        //}
-
-                        float distance = math.distance(M, intersection);
-                        if (distance < distanceMI)
+                        if (Math2DUtils.IsVertexReflex(
+                            Polygon[prevOuterPolygonVertex.Value],
+                            Polygon[currOuterPolygonVertex.Value],
+                            Polygon[nextOuterPolygonVertex.Value],
+                            true))
                         {
-                            vi = contourEnum;
-                            I = intersection;
-                            distanceMI = distance;
-                        }
-                    }
+                            bool isInsideMIPTriangle = Math2DUtils.IsInsideTriangle(Polygon[currOuterPolygonVertex.Value],
+                                                                                        hole.BridgePoint,
+                                                                                        intersectionPoint,
+                                                                                        Polygon[P.Value]);
+                            existReflexVertexInsideMIP |= isInsideMIPTriangle;
 
-                    NativeLinkedList<int>.Enumerator selectedBridgePoint;
-                    if (Geometry2DUtils.SamePoints(I, Polygon.Vertices[vi.Value]))
-                    {
-                        //I is a vertex of the outer polygon
-                        selectedBridgePoint = vi;
-                    }
-                    else
-                    {
-                        NativeLinkedList<int>.Enumerator viplus1 = (!vi.Next.IsValid) ? VertexIndexLinkedList.Head : vi.Next;
-                        //I is an interior point of the edge <V(i), V(i+1)>, select P as the maximum x-value endpoint of the edge
-                        NativeLinkedList<int>.Enumerator P = (Polygon.Vertices[viplus1.Value].x > Polygon.Vertices[vi.Value].x) ? viplus1 : vi;
-                        selectedBridgePoint = P;
-                        //Search the reflex vertices of the outer polygon (not including P if it happens to be reflex)                    
-                        float minAngle = float.MaxValue;
-                        float minDist = float.MaxValue;
-                        for (NativeLinkedList<int>.Enumerator contourEnum = VertexIndexLinkedList.Head;
-                            contourEnum.IsValid;
-                            contourEnum.MoveNext())
-                        {
-                            //not including P
-                            if (contourEnum == P)
-                            {
-                                continue;
-                            }
-
-                            int currentIndex = contourEnum.Value;
-                            int previousIndex = (!contourEnum.Prev.IsValid) ? VertexIndexLinkedList.Tail.Value : contourEnum.Prev.Value;
-                            int nextIndex = (!contourEnum.Next.IsValid) ? VertexIndexLinkedList.Head.Value : contourEnum.Next.Value;
-
-                            bool isReflex = Geometry2DUtils.IsVertexReflex(Polygon.Vertices[previousIndex], Polygon.Vertices[currentIndex], Polygon.Vertices[nextIndex], true);
-                            if (!isReflex)
-                            {
-                                continue;
-                            }
-
-                            bool isReflexVertexInsideMIPTriangle = Geometry2DUtils.IsInsideTriangle(Polygon.Vertices[currentIndex], M, I, Polygon.Vertices[P.Value]);
-                            if (isReflexVertexInsideMIPTriangle)
+                            if (isInsideMIPTriangle)
                             {
                                 //search for the reflex vertex R that minimizes the angle between (1,0) and the line segment M-R
-                                float2 atan2 = Polygon.Vertices[currentIndex] - M;
-                                float angleRMI = math.atan2(atan2.y, atan2.x);
-                                if (angleRMI < minAngle)
+                                float2 MR = Polygon[currOuterPolygonVertex.Value] - hole.BridgePoint;
+                                float angleMRI = math.atan2(MR.y, MR.x);
+                                if (angleMRI < minAngle)
                                 {
-                                    selectedBridgePoint = contourEnum;
-                                    minAngle = angleRMI;
+                                    selectedHullBridgePoint = currOuterPolygonVertex;
+                                    minAngle = angleMRI;
                                 }
-                                else if (math.abs(angleRMI - minAngle) < float.Epsilon)
+                                else if (math.abs(angleMRI - minAngle) <= float.Epsilon)
                                 {
                                     //same angle
-                                    float distanceRM = math.lengthsq(atan2);
-                                    if (distanceRM < minDist)
+                                    float lengthMR = math.length(MR);
+                                    if (lengthMR < minDist)
                                     {
-                                        selectedBridgePoint = contourEnum;
-                                        minDist = distanceRM;
+                                        selectedHullBridgePoint = currOuterPolygonVertex;
+                                        minDist = lengthMR;
                                     }
                                 }
                             }
                         }
-                    }
 
-                    //insert the bridge points and the holes points inside the linked list
-                    int holeStartIndex = Polygon.StartPointsHoles[holesData[i].HoleIndex];
-                    int holeLength = Polygon.NumPointsPerHole[holesData[i].HoleIndex];
-                    int holeEndIndex = holeStartIndex + holeLength;
-                    int internalMaxXIndex = holeStartIndex + holesData[i].IndexMaxX;
-                    VertexIndexLinkedList.InsertAfter(selectedBridgePoint, selectedBridgePoint.Value);
-                    for (int j = internalMaxXIndex, count = 0;
-                        count < holeLength;
-                        ++count, j = (j == holeStartIndex) ? holeEndIndex - 1 : j - 1)
-                    {
-                        VertexIndexLinkedList.InsertAfter(selectedBridgePoint, j);
+                        if (!existReflexVertexInsideMIP)
+                        {
+                            selectedHullBridgePoint = P;
+                        }
                     }
-                    VertexIndexLinkedList.InsertAfter(selectedBridgePoint, internalMaxXIndex);
                 }
 
-                holesData.Dispose();
+                int holeStartIndex = hole.HoleFirstIndex;
+                int holeLength = hole.HoleLength;
+                int holeEndIndex = holeStartIndex + holeLength;
+                hullVertices.InsertAfter(selectedHullBridgePoint, selectedHullBridgePoint.Value);
+                for (int i = hole.BridgePointIndex, count = 0;
+                    count < holeLength;
+                    ++count, i = (i == holeStartIndex) ? holeEndIndex - 1 : i - 1)
+                {
+                    hullVertices.InsertAfter(selectedHullBridgePoint, i);
+                }
+                hullVertices.InsertAfter(selectedHullBridgePoint, hole.BridgePointIndex);
             }
+            holes.Dispose();
             #endregion
 
-            #region Triangulation
-            //Triangulation
-            int trisIndex = 0;
-            NativeLinkedList<int>.Enumerator cur = VertexIndexLinkedList.Head;
-            while (VertexIndexLinkedList.Length > 2)
+            Triangulate(hullVertices);
+            hullVertices.Dispose();
+        }
+
+
+        private NativeLinkedList<int> StorePolygonContourAsLinkedList()
+        {
+            int totNumVerts = Polygon.HolesNum * 2 + Polygon.VerticesNum;
+            NativeLinkedList<int> linkedList = new NativeLinkedList<int>(totNumVerts, Allocator.Temp);
+            //add contour points to the vertices linked list and set the max ray length
+            for (int i = 0; i < Polygon.ContourPointsNum; ++i)
             {
-                if (!cur.IsValid)
-                {
-                    cur = VertexIndexLinkedList.Head;
-                }
-                int iCur = cur.Value;
-                int iPrev = (!cur.Prev.IsValid) ? VertexIndexLinkedList.Tail.Value : cur.Prev.Value;
-                int iNext = (!cur.Next.IsValid) ? VertexIndexLinkedList.Head.Value : cur.Next.Value;
-
-                //check if the current vertex is an interior one
-                if (!Geometry2DUtils.IsVertexConvex(Polygon.Vertices[iPrev], Polygon.Vertices[iCur], Polygon.Vertices[iNext], true))
-                {
-                    cur.MoveNext();
-                    continue;
-                }
-
-                //check if any point inside the found triangle
-                bool pointInsideTriangleExists = false;
-                for (int j = 0; j < Polygon.NumTotVertices; ++j)
-                {
-                    if (j == iPrev || j == iCur || j == iNext)
-                    {
-                        continue;
-                    }
-                    pointInsideTriangleExists |= Geometry2DUtils.IsInsideTriangle(Polygon.Vertices[j], Polygon.Vertices[iPrev], Polygon.Vertices[iCur], Polygon.Vertices[iNext]);
-                }
-
-                if (pointInsideTriangleExists)
-                {
-                    cur.MoveNext();
-                    continue;
-                }
-
-                //create the tris
-                OutTriangles[trisIndex] = iNext;
-                OutTriangles[trisIndex + 1] = iCur;
-                OutTriangles[trisIndex + 2] = iPrev;
-                trisIndex += 3;
-
-                VertexIndexLinkedList.Remove(cur);
+                linkedList.InsertAfter(linkedList.Tail, i);
             }
-            VertexIndexLinkedList.Dispose();
-            #endregion
+            return linkedList;
+        }
+
+        private NativeArray<ECHoleData> GetHolesDataSortedByMaxX()
+        {
+            NativeArray<ECHoleData> holesData = new NativeArray<ECHoleData>(Polygon.HolesNum, Allocator.Temp);
+            for (int hi = 0; hi < Polygon.HolesNum; ++hi)
+            {
+                var hole = Polygon.GetPolygonHole(hi);
+                int indexMaxX = -1;
+                float maxX = float.MinValue;
+
+                for (int hvi = 0; hvi < hole.Length; ++hvi)
+                {
+                    if (maxX < hole[hvi].Point.x)
+                    {
+                        maxX = hole[hvi].Point.x;
+                        indexMaxX = hole[hvi].Index;
+                    }
+                }
+
+                holesData[hi] = new ECHoleData
+                {
+                    HoleIndex = hi,
+                    HoleFirstIndex = hole[0].Index,
+                    HoleLength = hole.Length,
+                    BridgePointIndex = indexMaxX,
+                    BridgePoint = Polygon[indexMaxX]
+                };
+            }
+            holesData.Sort();
+            return holesData;
+        }
+
+        private void Triangulate(NativeLinkedList<int> list)
+        {
+            int trisIndex = 0;
+            while (list.Length > 2)
+            {
+                bool hasRemovedEar = false;
+
+                int currListIndex = 0;
+                NativeLinkedList<int>.Enumerator currIndexNode = list.Head;
+                for (int i = 0; i < list.Length; ++i)
+                {
+                    NativeLinkedList<int>.Enumerator prevIndexNode = (currIndexNode.Prev.IsValid) ? currIndexNode.Prev : list.Tail;
+                    NativeLinkedList<int>.Enumerator nextIndexNode = (currIndexNode.Next.IsValid) ? currIndexNode.Next : list.Head;
+
+                    bool isCurrentConvex = Math2DUtils.IsVertexConvex(Polygon[prevIndexNode.Value], Polygon[currIndexNode.Value], Polygon[nextIndexNode.Value], true);
+                    if (isCurrentConvex)
+                    {
+                        bool triangleContainsAVertex = TriangleContainsVertexInList(prevIndexNode.Value, currIndexNode.Value, nextIndexNode.Value, list);
+                        if (!triangleContainsAVertex)
+                        {
+                            OutTriangles[trisIndex] = nextIndexNode.Value;
+                            OutTriangles[trisIndex + 1] = currIndexNode.Value;
+                            OutTriangles[trisIndex + 2] = prevIndexNode.Value;
+                            trisIndex += 3;
+
+                            list.Remove(currIndexNode);
+
+                            hasRemovedEar = true;
+                            break;
+                        }
+                    }
+
+                    currListIndex = (currListIndex + 1) % list.Length;
+                    currIndexNode = list.GetEnumeratorAtIndex(currListIndex);
+                }
+
+                if (!hasRemovedEar)
+                {
+                    return;
+                }
+            }
+        }
+
+        private bool TriangleContainsVertexInList(int indexPrev, int indexCurr, int indexNext, NativeLinkedList<int> list)
+        {
+            for (NativeLinkedList<int>.Enumerator currIndexNode = list.Head; currIndexNode.IsValid; currIndexNode.MoveNext())
+            {
+                NativeLinkedList<int>.Enumerator prevIndexNode = (currIndexNode.Prev.IsValid) ? currIndexNode.Prev : list.Tail;
+                NativeLinkedList<int>.Enumerator nextIndexNode = (currIndexNode.Next.IsValid) ? currIndexNode.Next : list.Head;
+
+                bool isCurrentConvex = Math2DUtils.IsVertexConvex(Polygon[prevIndexNode.Value], Polygon[currIndexNode.Value], Polygon[nextIndexNode.Value], true);
+                if (isCurrentConvex)
+                {
+                    continue;
+                }
+
+                int currIndexToCheck = currIndexNode.Value;
+                if (currIndexToCheck == indexPrev || currIndexToCheck == indexCurr || currIndexToCheck == indexNext)
+                {
+                    continue;
+                }
+
+                if (Math2DUtils.IsInsideTriangle(Polygon[currIndexToCheck], Polygon[indexPrev], Polygon[indexCurr], Polygon[indexNext]))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 }

@@ -1,9 +1,9 @@
-﻿using JacksonDunstan.NativeCollections;
-using System;
+﻿using System;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
+using JacksonDunstan.NativeCollections;
 
 namespace dousi96.Geometry.Triangulator
 {
@@ -30,7 +30,7 @@ namespace dousi96.Geometry.Triangulator
         }
 
         [ReadOnly]
-        public MultiPolygonJobData Polygons;
+        public MultiPolygonData Polygons;
         [WriteOnly]
         [NativeDisableParallelForRestriction]
         public NativeArray<int> OutTriangles;
@@ -58,7 +58,7 @@ namespace dousi96.Geometry.Triangulator
                     float2 nextPoint = Polygons[nextHullVertex.Value];
 
                     //M is to the left of the line containing the edge (M is inside the outer polygon)
-                    bool isMOnLeftOfEdgeLine = (Geometry2DUtils.LineSide(hole.BridgePoint, currPoint, nextPoint) < 0f);
+                    bool isMOnLeftOfEdgeLine = (Math2DUtils.LineSide(hole.BridgePoint, currPoint, nextPoint) < 0f);
                     if (isMOnLeftOfEdgeLine)
                     {
                         continue;
@@ -94,11 +94,11 @@ namespace dousi96.Geometry.Triangulator
 
                 var selectedHullBridgePoint = hullVertices.GetEnumerator();
                 //If I is a vertex of the outer polygon, then M and I are mutually visible
-                if (Geometry2DUtils.SamePoints(intersectionPoint, Polygons[intersectionEdgeP0.Value]))
+                if (Math2DUtils.SamePoints(intersectionPoint, Polygons[intersectionEdgeP0.Value]))
                 {
                     selectedHullBridgePoint = intersectionEdgeP0;
                 }
-                else if (Geometry2DUtils.SamePoints(intersectionPoint, Polygons[intersectionEdgeP1.Value]))
+                else if (Math2DUtils.SamePoints(intersectionPoint, Polygons[intersectionEdgeP1.Value]))
                 {
                     selectedHullBridgePoint = intersectionEdgeP1;
                 }
@@ -120,13 +120,13 @@ namespace dousi96.Geometry.Triangulator
                         var nextOuterPolygonVertex = (currOuterPolygonVertex.Next.IsValid) ? currOuterPolygonVertex.Next : hullVertices.Head;
                         var prevOuterPolygonVertex = (currOuterPolygonVertex.Prev.IsValid) ? currOuterPolygonVertex.Prev : hullVertices.Tail;
 
-                        if (Geometry2DUtils.IsVertexReflex(
+                        if (Math2DUtils.IsVertexReflex(
                             Polygons[prevOuterPolygonVertex.Value],
                             Polygons[currOuterPolygonVertex.Value],
                             Polygons[nextOuterPolygonVertex.Value],
                             true))
                         {
-                            bool isInsideMIPTriangle = Geometry2DUtils.IsInsideTriangle(Polygons[currOuterPolygonVertex.Value],
+                            bool isInsideMIPTriangle = Math2DUtils.IsInsideTriangle(Polygons[currOuterPolygonVertex.Value],
                                                                                         hole.BridgePoint,
                                                                                         intersectionPoint,
                                                                                         Polygons[P.Value]);
@@ -250,7 +250,7 @@ namespace dousi96.Geometry.Triangulator
                     NativeLinkedList<int>.Enumerator prevIndexNode = (currIndexNode.Prev.IsValid) ? currIndexNode.Prev : list.Tail;
                     NativeLinkedList<int>.Enumerator nextIndexNode = (currIndexNode.Next.IsValid) ? currIndexNode.Next : list.Head;
 
-                    bool isCurrentConvex = Geometry2DUtils.IsVertexConvex(Polygons[prevIndexNode.Value], Polygons[currIndexNode.Value], Polygons[nextIndexNode.Value], true);
+                    bool isCurrentConvex = Math2DUtils.IsVertexConvex(Polygons[prevIndexNode.Value], Polygons[currIndexNode.Value], Polygons[nextIndexNode.Value], true);
                     if (isCurrentConvex)
                     {
                         bool triangleContainsAVertex = TriangleContainsVertexInList(prevIndexNode.Value, currIndexNode.Value, nextIndexNode.Value, list);
@@ -286,7 +286,7 @@ namespace dousi96.Geometry.Triangulator
                 NativeLinkedList<int>.Enumerator prevIndexNode = (currIndexNode.Prev.IsValid) ? currIndexNode.Prev : list.Tail;
                 NativeLinkedList<int>.Enumerator nextIndexNode = (currIndexNode.Next.IsValid) ? currIndexNode.Next : list.Head;
 
-                bool isCurrentConvex = Geometry2DUtils.IsVertexConvex(Polygons[prevIndexNode.Value], Polygons[currIndexNode.Value], Polygons[nextIndexNode.Value], true);
+                bool isCurrentConvex = Math2DUtils.IsVertexConvex(Polygons[prevIndexNode.Value], Polygons[currIndexNode.Value], Polygons[nextIndexNode.Value], true);
                 if (isCurrentConvex)
                 {
                     continue;
@@ -298,7 +298,7 @@ namespace dousi96.Geometry.Triangulator
                     continue;
                 }
 
-                if (Geometry2DUtils.IsInsideTriangle(Polygons[currIndexToCheck], Polygons[indexPrev], Polygons[indexCurr], Polygons[indexNext]))
+                if (Math2DUtils.IsInsideTriangle(Polygons[currIndexToCheck], Polygons[indexPrev], Polygons[indexCurr], Polygons[indexNext]))
                 {
                     return true;
                 }

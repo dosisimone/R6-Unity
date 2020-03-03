@@ -4,8 +4,10 @@ using UnityEngine;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
+using dousi96.Geometry;
 using dousi96.Geometry.Triangulator;
 using dousi96.Geometry.Extruder;
+
 
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshCollider))]
@@ -19,9 +21,9 @@ public class Wall : MonoBehaviour
     MeshCollider meshCollider;
 
     private List<Vector2[]> clips;
-    private MultiPolygonJobData subjects;
-    private MultiPolygonJobData jobClips;
-    private MultiPolygonJobData clippingOutput;
+    private MultiPolygonData subjects;
+    private MultiPolygonData jobClips;
+    private MultiPolygonData clippingOutput;
     private NativeList<Vector3> OutVertices;
     private NativeList<int> OutTriangles;
     private JobHandle lastJobHandle;
@@ -37,11 +39,6 @@ public class Wall : MonoBehaviour
         meshCollider = GetComponent<MeshCollider>();
         meshCollider.sharedMesh = meshFilter.sharedMesh;
 
-        //boxCollider = GetComponent<BoxCollider>();
-
-        //boxCollider.size = size;
-        //boxCollider.center = new Vector3(0.0f, halfSize.y, 0f);
-
         clips = new List<Vector2[]>();
         
         Vector2[] contourn = {
@@ -51,7 +48,7 @@ public class Wall : MonoBehaviour
             new Vector2(-halfSize.x, +size.y)
         };
 
-        subjects = new MultiPolygonJobData(Allocator.Persistent);
+        subjects = new MultiPolygonData(Allocator.Persistent);
         subjects.AddPolygon(contourn);
 
         ScheduleJobs();
@@ -121,10 +118,10 @@ public class Wall : MonoBehaviour
     {
         Vector2 halfSize = size / 2f;
 
-        jobClips = new MultiPolygonJobData(Allocator.TempJob);
+        jobClips = new MultiPolygonData(Allocator.TempJob);
         OutVertices = new NativeList<Vector3>(Allocator.TempJob);
         OutTriangles = new NativeList<int>(Allocator.TempJob);
-        clippingOutput = new MultiPolygonJobData(Allocator.Persistent);
+        clippingOutput = new MultiPolygonData(Allocator.Persistent);
 
         foreach (Vector2[] clip in clips)
         {
@@ -188,7 +185,7 @@ public class Wall : MonoBehaviour
         meshCollider.sharedMesh = meshFilter.sharedMesh;
         meshCollider.convex = false;
 
-        MultiPolygonJobData temp = subjects;
+        MultiPolygonData temp = subjects;
         subjects = clippingOutput;
         clippingOutput = temp;
 
@@ -202,13 +199,10 @@ public class Wall : MonoBehaviour
 
     private Vector2 GetUnitOnCircle(float radians, float radius)
     {
-        // get the 2D dimensional coordinates
-        float x = radius * Mathf.Cos(radians);
-        float y = radius * Mathf.Sin(radians);
-        // return the vector info
-        return new Vector2(x, y);
+        return new Vector2(Mathf.Cos(radians), Mathf.Sin(radians)) * radius;
     }
 
+#if UNITY_EDITOR
     private void OnDrawGizmos()
     {
         Gizmos.color = Color.grey;
@@ -216,4 +210,5 @@ public class Wall : MonoBehaviour
         Gizmos.matrix = rotationMatrix;
         Gizmos.DrawCube(new Vector3(0.0f, size.y / 2f, 0f), size);
     }
+#endif
 }

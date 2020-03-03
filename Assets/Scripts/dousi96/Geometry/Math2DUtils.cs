@@ -1,10 +1,10 @@
-﻿using Unity.Burst;
+﻿using UnityEngine;
+using Unity.Burst;
 using Unity.Mathematics;
-using UnityEngine;
 
 namespace dousi96.Geometry
 {
-    public static class Geometry2DUtils
+    public static class Math2DUtils
     {
         [BurstCompile]
         public static bool IsVertexConvex(float2 prevP0, float2 P0, float2 nextP0, bool isCCW)
@@ -47,39 +47,39 @@ namespace dousi96.Geometry
             return s >= 0 && t >= 0 && (s + t) <= 1;
         }
 
-        //[BurstCompile]
-        //public static bool SegmentsIntersection(float2 a0, float2 a1, float2 b0, float2 b1, out float2 intersection)
-        //{
-        //    intersection = new float2();
+        [BurstCompile]
+        public static bool SegmentsIntersection(float2 a0, float2 a1, float2 b0, float2 b1, out float2 intersection)
+        {
+            intersection = new float2();
 
-        //    float2 r = a1 - a0;
-        //    float2 s = b1 - b0;
+            float2 r = a1 - a0;
+            float2 s = b1 - b0;
 
-        //    float RxS = Cross2D(r, s);
-        //    float QminusPxR = Cross2D(b0 - a0, r);
-        //    float QminusPxS = Cross2D(b0 - a0, s);
-        //    float t = QminusPxS / RxS;
-        //    float u = QminusPxR / RxS;
+            float RxS = Cross2D(r, s);
+            float QminusPxR = Cross2D(b0 - a0, r);
+            float QminusPxS = Cross2D(b0 - a0, s);
+            float t = QminusPxS / RxS;
+            float u = QminusPxR / RxS;
 
-        //    bool isRxS0 = math.abs(RxS) < float.Epsilon;
-        //    bool isQminusPxR0 = math.abs(QminusPxR) < float.Epsilon;
-        //    if (isRxS0 && isQminusPxR0)
-        //    {
-        //        //collinear
-        //    }
-        //    else if (isRxS0 && !isQminusPxR0)
-        //    {
-        //        //parallel lines
-        //        return false;
-        //    }
-        //    else if (!isRxS0 && t >= 0 && t <= 1 && u >= 0 && u <= 1)
-        //    {
-        //        intersection = a0 + t * r;
-        //        return true;
-        //    }
-        //    //no intersection
-        //    return false;
-        //}
+            bool isRxS0 = math.abs(RxS) < float.Epsilon;
+            bool isQminusPxR0 = math.abs(QminusPxR) < float.Epsilon;
+            if (isRxS0 && isQminusPxR0)
+            {
+                //collinear
+            }
+            else if (isRxS0 && !isQminusPxR0)
+            {
+                //parallel lines
+                return false;
+            }
+            else if (!isRxS0 && t >= 0 && t <= 1 && u >= 0 && u <= 1)
+            {
+                intersection = a0 + t * r;
+                return true;
+            }
+            //no intersection
+            return false;
+        }
 
         [BurstCompile]
         public static float Cross2D(float2 a, float2 b)
